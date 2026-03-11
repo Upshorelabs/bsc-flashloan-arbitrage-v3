@@ -1,0 +1,267 @@
+const fs = require('fs');
+const archiver = require('archiver');
+
+// Create output stream
+const output = fs.createWriteStream('flashloan-arbitrage-v3.zip');
+const archive = archiver('zip', { zlib: { level: 9 } });
+
+output.on('close', () => console.log(`✅ Zip created: ${archive.pointer()} total bytes`));
+archive.on('error', (err) => { throw err; });
+
+archive.pipe(output);
+
+// ----------------------------
+// 1️⃣ Add contract
+// ----------------------------
+const contractContent = `
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface IERC20{
+    function balanceOf(address account) external view returns(uint);
+    function transfer(address recipient,uint amount) external returns(bool);
+    function approve(address spender,uint amount) external returns(bool);
+}
+
+interface IRouter{
+    function swapExactTokensForTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns(uint[] memory amounts);
+}
+
+interface IFlashLoanProvider{
+    function flashLoan(
+        address receiver,
+        address token,
+        uint amount,
+        bytes calldata params
+    ) external;
+}
+
+contract FlashLoanArbitrageV3{
+
+    address public owner;
+    address public profitWallet;
+
+    constructor(address _profitWallet){
+        owner = msg.sender;
+        profitWallet = _profitWallet;
+    }
+
+    modifier onlyOwner(){
+        require(msg.sender == owner,"Not owner");
+        _;
+    }
+
+    function startArbitrage(
+        address flashLoanProvider,
+        address tokenA,
+        uint amount,
+        address router1,
+        address router2,
+        address tokenB
+    ) external onlyOwner{
+        bytes memory data = abi.encode(router1,router2,tokenA,tokenB);
+        IFlashLoanProvider(flashLoanProvider).flashLoan(
+            address(this),
+            tokenA,
+            amount,
+            data
+        );
+    }
+
+    function executeOperation(
+        address token,
+        uint amount,
+        uint fee,
+        bytes calldata params
+    ) external{
+        (
+            address router1,
+            address router2,
+            address tokenA,
+            address tokenB
+        ) = abi.decode(params,(address,address,address,address));
+
+        IERC20(tokenA).approve(router1,amount);
+
+        address ;
+        path[0] = tokenA;
+        path[1] = tokenB;
+
+        IRouter(router1).swapExactTokensForTokens(
+            amount,
+            1,
+            path,
+            address(this),
+            block.timestamp
+        );
+
+        uint tokenBBalance = IERC20(tokenB).balanceOf(address(this));
+        IERC20(tokenB).approve(router2,tokenBBalance);
+
+        path[0] = tokenB;
+        path[1] = tokenA;
+
+        IRouter(router2).swapExactTokensForTokens(
+            tokenBBalance,
+            1,
+            path,
+            address(this),
+            block.timestamp
+        );
+
+        uint totalDebt = amount + fee;
+        IERC20(tokenA).approve(msg.sender,totalDebt);
+
+        uint balanceAfter = IERC20(tokenA).balanceOf(address(this));
+        if(balanceAfter > totalDebt){
+            uint profit = balanceAfter - totalDebt;
+            IERC20(tokenA).transfer(profitWallet,profit);
+        }
+    }
+
+    function withdrawToken(address token) external onlyOwner{
+        uint balance = IERC20(token).balanceOf(address(this));
+        IERC20(token).transfer(profitWallet,balance);
+    }
+
+    function updateProfitWallet(address newWallet) external onlyOwner{
+        profitWallet = newWallet;
+    }
+}
+`;
+
+archive.append(contractContent, { name: 'contracts/FlashLoanArbitrageV3.sol' });
+
+// ----------------------------
+// 2️⃣ Add deploy.js
+// ----------------------------
+const deployContent = `
+require("dotenv").config();
+const { ethers } = require("ethers");
+
+const RPC = process.env.RPC_URL;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const PROFIT_WALLET = process.env.PROFIT_WALLET;
+
+if (!RPC || !PRIVATE_KEY || !PROFIT_WALLET) {
+  console.error("❌ Missing required secrets: RPC_URL, PRIVATE_KEY, PROFIT_WALLET");
+  process.exit(1);
+}
+
+const provider = new ethers.JsonRpcProvider(RPC);
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+// Replace these with your compiled contract ABI and BYTECODE from Remix
+const ABI = [ /* Paste your ABI array here */ ];
+const BYTECODE = "0x..."; // Paste your compiled bytecode here
+
+async function main() {
+  console.log("🚀 Deploying FlashLoanArbitrageV3...");
+
+  const factory = new ethers.ContractFactory(ABI, BYTECODE, wallet);
+  const contract = await factory.deploy(PROFIT_WALLET);
+
+  await contract.waitForDeployment();
+
+  const deployedAddress = await contract.getAddress();
+  console.log("✅ Contract deployed at:", deployedAddress);
+}
+
+main().catch((err) => {
+  console.error("❌ Deployment failed:", err);
+  process.exit(1);
+});
+`;
+
+archive.append(deployContent, { name: 'scripts/deploy.js' });
+
+// ----------------------------
+// 3️⃣ Add package5.json
+// ----------------------------
+const packageJsonContent = `
+{
+  "name": "flashloan-arbitrage-v3",
+  "version": "1.0.0",
+  "description": "FlashLoan Arbitrage V3 on BNB Smart Chain",
+  "main": "scripts/deploy.js",
+  "scripts": {
+    "deploy": "node scripts/deploy.js"
+  },
+  "dependencies": {
+    "ethers": "^6.16.0",
+    "dotenv": "^16.6.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+`;
+
+archive.append(packageJsonContent, { name: 'package5.json' });
+
+// ----------------------------
+// 4️⃣ Add workflow
+// ----------------------------
+const workflowContent = `
+name: Deploy BSC Contract
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: .
+
+      - name: Deploy contract
+        run: node scripts/deploy.js
+        env:
+          PRIVATE_KEY: \${{ secrets.PRIVATE_KEY }}
+          RPC_URL: \${{ secrets.RPC_URL }}
+          PROFIT_WALLET: \${{ secrets.PROFIT_WALLET }}
+`;
+
+archive.append(workflowContent, { name: '.github/workflows/deploy.yml' });
+
+// ----------------------------
+// 5️⃣ Add README.md
+// ----------------------------
+const readmeContent = `
+# FlashLoan Arbitrage V3
+
+This repo contains the FlashLoanArbitrageV3 smart contract, deploy script, and GitHub Actions workflow to automatically deploy to BNB Smart Chain.
+
+## Usage
+
+1. Add secrets in GitHub: \`PRIVATE_KEY\`, \`RPC_URL\`, \`PROFIT_WALLET\`.
+2. Push to main → Actions workflow will deploy contract automatically.
+`;
+
+archive.append(readmeContent, { name: 'README.md' });
+
+// ----------------------------
+// Finalize zip
+// ----------------------------
+archive.finalize();
