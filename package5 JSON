@@ -1,7 +1,7 @@
 {
-  "name": "bsc-flashloan-arbitrage-v3",
+  "name": "flashloan-arbitrage-v3",
   "version": "1.0.0",
-  "description": "FlashLoan Arbitrage V3 for BNB Smart Chain",
+  "description": "FlashLoan Arbitrage V3 on BNB Smart Chain",
   "main": "scripts/deploy.js",
   "scripts": {
     "deploy": "node scripts/deploy.js"
@@ -9,5 +9,8 @@
   "dependencies": {
     "ethers": "^6.16.0",
     "dotenv": "^16.6.1"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
