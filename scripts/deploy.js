@@ -6,11 +6,16 @@ const RPC = process.env.RPC_URL;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const PROFIT_WALLET = process.env.PROFIT_WALLET;
 
+if (!RPC || !PRIVATE_KEY || !PROFIT_WALLET) {
+  console.error("❌ Missing required secrets: RPC_URL, PRIVATE_KEY, PROFIT_WALLET");
+  process.exit(1);
+}
+
 const provider = new ethers.JsonRpcProvider(RPC);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// Replace with your compiled contract ABI and bytecode from Remix
-const ABI = [ /* Paste your ABI here */ ];
+// Replace these with your compiled contract ABI and BYTECODE from Remix
+const ABI = [ /* Paste your ABI array here */ ];
 const BYTECODE = "0x..."; // Paste your compiled bytecode here
 
 async function main() {
@@ -21,7 +26,8 @@ async function main() {
 
   await contract.waitForDeployment();
 
-  console.log("✅ Contract deployed at:", await contract.getAddress());
+  const deployedAddress = await contract.getAddress();
+  console.log("✅ Contract deployed at:", deployedAddress);
 }
 
 main().catch((err) => {
